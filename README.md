@@ -1,6 +1,6 @@
 # Contador API
 
-Servicio HTTP mínimo para contar visitas. Cada vez que el front haga una petición `POST /api/visits`, el contador aumenta y se persiste en `data/visit-count.json`, lo que evita perder el número si el proceso se reinicia.
+Servicio HTTP mínimo para contar visitas. Cada vez que el front haga una petición `POST /api/visits`, el contador aumenta para la ruta indicada y se persiste en `data/visit-count.json`, lo que evita perder los números si el proceso se reinicia.
 
 ## Requisitos
 
@@ -18,8 +18,8 @@ Puedes definir el puerto con la variable de entorno `PORT` (por defecto 4000).
 
 ## Endpoints
 
-- `GET /api/visits` → devuelve `{ "count": number }` con el valor actual.
-- `POST /api/visits` → incrementa en 1, persiste y devuelve el nuevo valor `{ "count": number }`.
+- `GET /api/visits` → devuelve el estado completo del contador: `{ "total": number, "routes": { [route: string]: number } }`.
+- `POST /api/visits` → incrementa el total y la ruta indicada. Espera un cuerpo JSON con `{ "route": "inicio" }` y responde el mismo formato del `GET`.
 
 ## Flujo típico de despliegue (EC2)
 
