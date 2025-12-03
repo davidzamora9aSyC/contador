@@ -7,30 +7,35 @@
     "ortodoncia": 35
   },
   "daily": {
-    "2025-11-27": {
-      "inicio": 35,
+    "2025-11-26": {
+      "inicio": 30,
       "blog": 5,
-      "whatsapp": 8
+      "whatsapp": 7
+    },
+    "2025-11-27": {
+      "inicio": 29,
+      "blog": 5,
+      "whatsapp": 7
     },
     "2025-11-28": {
-      "inicio": 35,
-      "blog": 5,
-      "whatsapp": 8
+      "inicio": 29,
+      "blog": 4,
+      "whatsapp": 7
     },
     "2025-11-29": {
-      "inicio": 35,
-      "blog": 5,
-      "whatsapp": 8
+      "inicio": 29,
+      "blog": 4,
+      "whatsapp": 7
     },
     "2025-11-30": {
-      "inicio": 35,
-      "blog": 5,
-      "whatsapp": 9
+      "inicio": 29,
+      "blog": 4,
+      "whatsapp": 7
     },
     "2025-12-01": {
-      "inicio": 35,
-      "blog": 6,
-      "whatsapp": 9
+      "inicio": 29,
+      "blog": 4,
+      "whatsapp": 7
     },
     "2025-12-02": {
       "inicio": 20,
