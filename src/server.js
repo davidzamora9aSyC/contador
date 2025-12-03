@@ -9,7 +9,7 @@ const LEGACY_ROUTE_NAME = 'general';
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const MAX_DAILY_HISTORY_DAYS = 366;
 const RANGE_PRESETS = { week: 7, '30d': 30, year: 365 };
-const DAILY_SEED_RANGE_DAYS = 7;
+const COLOMBIA_UTC_OFFSET_MS = -5 * 60 * 60 * 1000; // Colombia timezone (UTC-5)
 const RANGE_ALIASES = {
   week: 'week',
   semana: 'week',
@@ -54,14 +54,7 @@ async function loadCount() {
     const fileContents = await fs.readFile(DATA_FILE, 'utf8');
     const parsed = JSON.parse(fileContents);
     visitStats = normalizeStats(parsed);
-    let seededDaily = false;
-    if (!Object.keys(visitStats.daily || {}).length && Object.keys(visitStats.routes || {}).length) {
-      seededDaily = seedDailyStatsFromRoutes();
-    }
     pruneDailyStats();
-    if (seededDaily) {
-      await persistCount();
-    }
     console.log(
       `[contador-api] Conteo inicial cargado: total=${visitStats.total}, rutas=${Object.keys(visitStats.routes).length}`
     );
@@ -172,23 +165,12 @@ function formatDateKey(date) {
   return date.toISOString().slice(0, 10);
 }
 
-function getTodayKey() {
-  return formatDateKey(new Date());
+function getColombiaDate(referenceDate = new Date()) {
+  return new Date(referenceDate.getTime() + COLOMBIA_UTC_OFFSET_MS);
 }
 
-function getDateKeyNDaysAgo(daysAgo, referenceDate = new Date()) {
-  const date = new Date(referenceDate);
-  date.setUTCDate(date.getUTCDate() - daysAgo);
-  return formatDateKey(date);
-}
-
-function buildRecentDateKeys(days, referenceDate = new Date()) {
-  const limit = Math.max(1, Math.min(days, MAX_DAILY_HISTORY_DAYS));
-  const keys = [];
-  for (let i = limit - 1; i >= 0; i -= 1) {
-    keys.push(getDateKeyNDaysAgo(i, referenceDate));
-  }
-  return keys;
+function getTodayKey(referenceDate = new Date()) {
+  return formatDateKey(getColombiaDate(referenceDate));
 }
 
 function isValidDateKey(dateKey) {
@@ -197,7 +179,7 @@ function isValidDateKey(dateKey) {
 
 function getTimestampForDateKey(dateKey) {
   const parsed = Date.parse(dateKey);
-  return Number.isFinite(parsed) ? parsed : NaN;
+  return Number.isFinite(parsed) ? parsed - COLOMBIA_UTC_OFFSET_MS : NaN;
 }
 
 function pruneDailyStats(referenceDate = new Date()) {
@@ -206,7 +188,7 @@ function pruneDailyStats(referenceDate = new Date()) {
     return;
   }
 
-  const todayTimestamp = getTimestampForDateKey(formatDateKey(referenceDate));
+  const todayTimestamp = getTimestampForDateKey(getTodayKey(referenceDate));
   if (!Number.isFinite(todayTimestamp)) {
     return;
   }
@@ -218,54 +200,6 @@ function pruneDailyStats(referenceDate = new Date()) {
       delete visitStats.daily[dateKey];
     }
   }
-}
-
-function seedDailyStatsFromRoutes(referenceDate = new Date()) {
-  if (!visitStats || !visitStats.routes) {
-    return false;
-  }
-
-  const routeEntries = Object.entries(visitStats.routes);
-  if (!routeEntries.length) {
-    return false;
-  }
-
-  const dateKeys = buildRecentDateKeys(DAILY_SEED_RANGE_DAYS, referenceDate);
-  if (!dateKeys.length) {
-    return false;
-  }
-
-  const seededDaily = {};
-  for (const dateKey of dateKeys) {
-    seededDaily[dateKey] = {};
-  }
-
-  const numDays = dateKeys.length;
-  for (const [routeName, value] of routeEntries) {
-    const sanitizedRoute = sanitizeRoute(routeName);
-    const visits = Number(value) || 0;
-    if (!sanitizedRoute || visits <= 0) {
-      continue;
-    }
-
-    const base = Math.floor(visits / numDays);
-    const remainder = visits % numDays;
-    for (let index = 0; index < numDays; index += 1) {
-      const amount = base + (index < remainder ? 1 : 0);
-      if (!amount) {
-        continue;
-      }
-
-      const dateKey = dateKeys[index];
-      seededDaily[dateKey][sanitizedRoute] = (seededDaily[dateKey][sanitizedRoute] || 0) + amount;
-    }
-  }
-
-  visitStats.daily = Object.fromEntries(
-    Object.entries(seededDaily).filter(([, routes]) => Object.keys(routes).length)
-  );
-
-  return Object.keys(visitStats.daily).length > 0;
 }
 
 function incrementDailyCount(route, dateKey = getTodayKey()) {

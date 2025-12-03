@@ -1,3 +1,50 @@
 {
-  "count": 1
+  "total": 361,
+  "routes": {
+    "general": 1,
+    "inicio": 226,
+    "blog": 40,
+    "whatsapp": 59,
+    "ortodoncia": 35
+  },
+  "daily": {
+    "2025-11-27": {
+      "general": 1,
+      "inicio": 35,
+      "blog": 5,
+      "whatsapp": 8
+    },
+    "2025-11-28": {
+      "inicio": 35,
+      "blog": 5,
+      "whatsapp": 8
+    },
+    "2025-11-29": {
+      "inicio": 35,
+      "blog": 5,
+      "whatsapp": 8
+    },
+    "2025-11-30": {
+      "inicio": 35,
+      "blog": 5,
+      "whatsapp": 9
+    },
+    "2025-12-01": {
+      "inicio": 35,
+      "blog": 6,
+      "whatsapp": 9
+    },
+    "2025-12-02": {
+      "inicio": 20,
+      "blog": 6,
+      "whatsapp": 11,
+      "ortodoncia": 20
+    },
+    "2025-12-03": {
+      "inicio": 21,
+      "whatsapp": 6,
+      "ortodoncia": 20,
+      "blog": 7
+    }
+  }
 }
