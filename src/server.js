@@ -80,9 +80,10 @@ function normalizeStats(raw) {
   const normalizedRoutes = {};
   if (raw.routes && typeof raw.routes === 'object') {
     for (const [routeName, value] of Object.entries(raw.routes)) {
+      const sanitized = sanitizeRoute(routeName);
       const visits = Number(value) || 0;
-      if (visits > 0 && routeName) {
-        normalizedRoutes[routeName] = visits;
+      if (visits > 0 && sanitized) {
+        normalizedRoutes[sanitized] = (normalizedRoutes[sanitized] || 0) + visits;
       }
     }
   }
@@ -96,7 +97,8 @@ function normalizeStats(raw) {
   if (!Object.keys(normalizedRoutes).length && typeof raw.count === 'number') {
     const legacyCount = Number(raw.count) || 0;
     if (legacyCount > 0) {
-      normalizedRoutes[LEGACY_ROUTE_NAME] = legacyCount;
+      const legacyRoute = sanitizeRoute(LEGACY_ROUTE_NAME) || LEGACY_ROUTE_NAME;
+      normalizedRoutes[legacyRoute] = legacyCount;
       totalFromRoutes = legacyCount;
       total = legacyCount;
     }
@@ -112,7 +114,14 @@ function sanitizeRoute(route) {
     return '';
   }
 
-  return route.trim();
+  const trimmed = route.trim().toLowerCase();
+  if (!trimmed) {
+    return '';
+  }
+
+  const [path = ''] = trimmed.split(/[?#]/);
+  const normalized = path.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\/+/g, '/');
+  return normalized;
 }
 
 function resolveRangeKey(rawRange) {
@@ -149,7 +158,7 @@ function normalizeDailyStats(rawDaily) {
       const sanitized = sanitizeRoute(routeName);
       const visits = Number(value) || 0;
       if (sanitized && visits > 0) {
-        normalizedRoutes[sanitized] = visits;
+        normalizedRoutes[sanitized] = (normalizedRoutes[sanitized] || 0) + visits;
       }
     }
 
