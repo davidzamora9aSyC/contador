@@ -468,7 +468,30 @@ function collectDailyVisits(rangeKey) {
 
 const app = express();
 
-app.use(cors());
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+const corsOptions = {
+  origin(origin, callback) {
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (!ALLOWED_ORIGINS.length) {
+      return callback(null, true);
+    }
+
+    if (ALLOWED_ORIGINS.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`Origen ${origin} no permitido por CORS`));
+  },
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 app.get('/api/visits', (req, res) => {
