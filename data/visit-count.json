@@ -1,10 +1,10 @@
 {
-  "total": 375,
+  "total": 378,
   "routes": {
-    "inicio": 235,
+    "inicio": 236,
     "blog": 41,
     "whatsapp": 60,
-    "ortodoncia": 38
+    "ortodoncia": 40
   },
   "daily": {
     "2025-11-26": {
@@ -44,10 +44,12 @@
       "ortodoncia": 20
     },
     "2025-12-03": {
-      "inicio": 30,
+      "inicio": 31,
       "whatsapp": 7,
-      "ortodoncia": 23,
+      "ortodoncia": 25,
       "blog": 8
     }
-  }
+  },
+  "sessionDurations": {},
+  "routeDurations": {}
 }

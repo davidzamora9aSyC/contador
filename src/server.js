@@ -10,6 +10,7 @@ const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const MAX_DAILY_HISTORY_DAYS = 366;
 const RANGE_PRESETS = { week: 7, '30d': 30, year: 365 };
 const COLOMBIA_UTC_OFFSET_MS = -5 * 60 * 60 * 1000; // Colombia timezone (UTC-5)
+const MAX_TRACKABLE_DURATION_MS = 24 * 60 * 60 * 1000; // Ignore sessions longer than 24 hours
 const RANGE_ALIASES = {
   week: 'week',
   semana: 'week',
@@ -36,7 +37,7 @@ const DATE_KEY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 let visitStats = createEmptyStats();
 
 function createEmptyStats() {
-  return { total: 0, routes: {}, daily: {} };
+  return { total: 0, routes: {}, daily: {}, sessionDurations: {}, routeDurations: {} };
 }
 
 async function ensureDataFile() {
@@ -105,8 +106,16 @@ function normalizeStats(raw) {
   }
 
   const normalizedDaily = normalizeDailyStats(raw.daily);
+  const normalizedSessionDurations = normalizeSessionDurationMap(raw.sessionDurations);
+  const normalizedRouteDurations = normalizeRouteDurationMap(raw.routeDurations);
 
-  return { total, routes: normalizedRoutes, daily: normalizedDaily };
+  return {
+    total,
+    routes: normalizedRoutes,
+    daily: normalizedDaily,
+    sessionDurations: normalizedSessionDurations,
+    routeDurations: normalizedRouteDurations,
+  };
 }
 
 function sanitizeRoute(route) {
@@ -122,6 +131,16 @@ function sanitizeRoute(route) {
   const [path = ''] = trimmed.split(/[?#]/);
   const normalized = path.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\/+/g, '/');
   return normalized;
+}
+
+function sanitizeDurationValue(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  const clamped = Math.min(parsed, MAX_TRACKABLE_DURATION_MS);
+  return Math.round(clamped);
 }
 
 function resolveRangeKey(rawRange) {
@@ -170,6 +189,112 @@ function normalizeDailyStats(rawDaily) {
   return normalized;
 }
 
+function normalizeDurationSummary(rawSummary) {
+  if (!rawSummary || typeof rawSummary !== 'object') {
+    return null;
+  }
+
+  const count = Number(rawSummary.count) || 0;
+  const totalDuration = Number(rawSummary.totalDuration) || 0;
+
+  if (!count || totalDuration <= 0) {
+    return null;
+  }
+
+  const average = totalDuration / count;
+  const normalizedMin = sanitizeDurationValue(Number(rawSummary.min)) ?? sanitizeDurationValue(average);
+  const normalizedMax = sanitizeDurationValue(Number(rawSummary.max)) ?? sanitizeDurationValue(average);
+
+  if (!normalizedMin || !normalizedMax) {
+    return null;
+  }
+
+  const min = Math.min(normalizedMin, normalizedMax);
+  const max = Math.max(normalizedMin, normalizedMax);
+
+  const minPossibleTotal = min * count;
+  const maxPossibleTotal = max * count;
+  let sanitizedTotal = Math.round(totalDuration);
+  if (!Number.isFinite(sanitizedTotal) || sanitizedTotal <= 0) {
+    sanitizedTotal = minPossibleTotal;
+  }
+  sanitizedTotal = Math.min(Math.max(sanitizedTotal, minPossibleTotal), maxPossibleTotal);
+
+  return {
+    min,
+    max,
+    count,
+    totalDuration: sanitizedTotal,
+  };
+}
+
+function mergeDurationSummaries(base, addition) {
+  if (!base) {
+    return addition;
+  }
+  if (!addition) {
+    return base;
+  }
+
+  return {
+    min: Math.min(base.min, addition.min),
+    max: Math.max(base.max, addition.max),
+    count: base.count + addition.count,
+    totalDuration: base.totalDuration + addition.totalDuration,
+  };
+}
+
+function normalizeSessionDurationMap(rawSessions) {
+  if (!rawSessions || typeof rawSessions !== 'object') {
+    return {};
+  }
+
+  const normalized = {};
+  for (const [dateKey, summary] of Object.entries(rawSessions)) {
+    if (!isValidDateKey(dateKey)) {
+      continue;
+    }
+
+    const normalizedSummary = normalizeDurationSummary(summary);
+    if (normalizedSummary) {
+      normalized[dateKey] = normalizedSummary;
+    }
+  }
+
+  return normalized;
+}
+
+function normalizeRouteDurationMap(rawRoutes) {
+  if (!rawRoutes || typeof rawRoutes !== 'object') {
+    return {};
+  }
+
+  const normalized = {};
+  for (const [dateKey, routes] of Object.entries(rawRoutes)) {
+    if (!isValidDateKey(dateKey) || !routes || typeof routes !== 'object') {
+      continue;
+    }
+
+    const normalizedRoutes = {};
+    for (const [routeName, summary] of Object.entries(routes)) {
+      const sanitized = sanitizeRoute(routeName);
+      if (!sanitized) {
+        continue;
+      }
+      const normalizedSummary = normalizeDurationSummary(summary);
+      if (normalizedSummary) {
+        normalizedRoutes[sanitized] = mergeDurationSummaries(normalizedRoutes[sanitized], normalizedSummary);
+      }
+    }
+
+    if (Object.keys(normalizedRoutes).length) {
+      normalized[dateKey] = normalizedRoutes;
+    }
+  }
+
+  return normalized;
+}
+
 function formatDateKey(date) {
   return date.toISOString().slice(0, 10);
 }
@@ -194,7 +319,12 @@ function getTimestampForDateKey(dateKey) {
 function pruneDailyStats(referenceDate = new Date()) {
   if (!visitStats.daily) {
     visitStats.daily = {};
-    return;
+  }
+  if (!visitStats.sessionDurations) {
+    visitStats.sessionDurations = {};
+  }
+  if (!visitStats.routeDurations) {
+    visitStats.routeDurations = {};
   }
 
   const todayTimestamp = getTimestampForDateKey(getTodayKey(referenceDate));
@@ -203,10 +333,20 @@ function pruneDailyStats(referenceDate = new Date()) {
   }
   const cutoffTimestamp = todayTimestamp - (MAX_DAILY_HISTORY_DAYS - 1) * DAY_IN_MS;
 
-  for (const dateKey of Object.keys(visitStats.daily)) {
+  pruneDateMap(visitStats.daily, cutoffTimestamp);
+  pruneDateMap(visitStats.sessionDurations, cutoffTimestamp);
+  pruneDateMap(visitStats.routeDurations, cutoffTimestamp);
+}
+
+function pruneDateMap(store, cutoffTimestamp) {
+  if (!store || typeof store !== 'object') {
+    return;
+  }
+
+  for (const dateKey of Object.keys(store)) {
     const dateTimestamp = getTimestampForDateKey(dateKey);
     if (!Number.isFinite(dateTimestamp) || dateTimestamp < cutoffTimestamp) {
-      delete visitStats.daily[dateKey];
+      delete store[dateKey];
     }
   }
 }
@@ -225,6 +365,73 @@ function incrementDailyCount(route, dateKey = getTodayKey()) {
   }
 
   visitStats.daily[dateKey][route] += 1;
+}
+
+function createDurationSummary(durationMs) {
+  return {
+    min: durationMs,
+    max: durationMs,
+    totalDuration: durationMs,
+    count: 1,
+  };
+}
+
+function updateSessionDurationMetrics(durationMs, dateKey = getTodayKey()) {
+  if (!visitStats.sessionDurations) {
+    visitStats.sessionDurations = {};
+  }
+
+  if (!visitStats.sessionDurations[dateKey]) {
+    visitStats.sessionDurations[dateKey] = createDurationSummary(durationMs);
+    return visitStats.sessionDurations[dateKey];
+  }
+
+  const summary = visitStats.sessionDurations[dateKey];
+  summary.count = (Number(summary.count) || 0) + 1;
+  summary.totalDuration = (Number(summary.totalDuration) || 0) + durationMs;
+  summary.min = typeof summary.min === 'number' ? Math.min(summary.min, durationMs) : durationMs;
+  summary.max = typeof summary.max === 'number' ? Math.max(summary.max, durationMs) : durationMs;
+  return summary;
+}
+
+function updateRouteDurationMetrics(route, durationMs, dateKey = getTodayKey()) {
+  if (!visitStats.routeDurations) {
+    visitStats.routeDurations = {};
+  }
+
+  if (!visitStats.routeDurations[dateKey]) {
+    visitStats.routeDurations[dateKey] = {};
+  }
+
+  if (!visitStats.routeDurations[dateKey][route]) {
+    visitStats.routeDurations[dateKey][route] = createDurationSummary(durationMs);
+    return visitStats.routeDurations[dateKey][route];
+  }
+
+  const summary = visitStats.routeDurations[dateKey][route];
+  summary.count = (Number(summary.count) || 0) + 1;
+  summary.totalDuration = (Number(summary.totalDuration) || 0) + durationMs;
+  summary.min = typeof summary.min === 'number' ? Math.min(summary.min, durationMs) : durationMs;
+  summary.max = typeof summary.max === 'number' ? Math.max(summary.max, durationMs) : durationMs;
+  return summary;
+}
+
+function buildDurationSummaryResponse(summary) {
+  if (!summary || typeof summary !== 'object') {
+    return null;
+  }
+
+  const count = Number(summary.count) || 0;
+  const totalDuration = Number(summary.totalDuration) || 0;
+  const average = count ? Math.round((totalDuration / count) * 100) / 100 : 0;
+
+  return {
+    min: summary.min,
+    max: summary.max,
+    count,
+    totalDuration,
+    average,
+  };
 }
 
 function collectDailyVisits(rangeKey) {
@@ -297,6 +504,49 @@ app.post('/api/visits', async (req, res, next) => {
     pruneDailyStats();
     await persistCount();
     res.json(visitStats);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/visits/durations', async (req, res, next) => {
+  try {
+    const scopeRaw = typeof req.body?.scope === 'string' ? req.body.scope.trim().toLowerCase() : '';
+    if (scopeRaw !== 'session' && scopeRaw !== 'route') {
+      return res.status(400).json({ message: 'La propiedad "scope" debe ser "session" o "route".' });
+    }
+
+    const durationMs = sanitizeDurationValue(req.body?.durationMs);
+    if (!durationMs) {
+      return res.status(400).json({ message: 'La propiedad "durationMs" debe ser un número mayor que 0.' });
+    }
+
+    const dateKey = getTodayKey();
+    pruneDailyStats();
+
+    if (scopeRaw === 'route') {
+      const sanitizedRoute = sanitizeRoute(req.body?.route);
+      if (!sanitizedRoute) {
+        return res.status(400).json({ message: 'La propiedad "route" es obligatoria cuando scope es "route".' });
+      }
+
+      const summary = updateRouteDurationMetrics(sanitizedRoute, durationMs, dateKey);
+      await persistCount();
+      return res.json({
+        scope: scopeRaw,
+        date: dateKey,
+        route: sanitizedRoute,
+        summary: buildDurationSummaryResponse(summary),
+      });
+    }
+
+    const summary = updateSessionDurationMetrics(durationMs, dateKey);
+    await persistCount();
+    res.json({
+      scope: scopeRaw,
+      date: dateKey,
+      summary: buildDurationSummaryResponse(summary),
+    });
   } catch (error) {
     next(error);
   }
