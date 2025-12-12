@@ -33,11 +33,63 @@ const RANGE_ALIASES = {
   'ultimos-12-meses': 'year',
 };
 const DATE_KEY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const DEFAULT_SITE = 'losandes';
+const SITE_ALIASES = {
+  losandes: 'losandes',
+  'los-andes': 'losandes',
+  'los_andes': 'losandes',
+  andes: 'losandes',
+  endomedicos: 'endomedicos',
+  'endo-medicos': 'endomedicos',
+  'endo_medicos': 'endomedicos',
+  'endomédicos': 'endomedicos',
+};
 
-let visitStats = createEmptyStats();
+let visitStatsBySite = { [DEFAULT_SITE]: createEmptyStats() };
 
 function createEmptyStats() {
   return { total: 0, routes: {}, daily: {}, sessionDurations: {}, routeDurations: {} };
+}
+
+function resolveSiteKey(rawSite) {
+  if (rawSite === undefined || rawSite === null || rawSite === '') {
+    return DEFAULT_SITE;
+  }
+  const normalized = String(rawSite).trim().toLowerCase();
+  if (!normalized) {
+    return DEFAULT_SITE;
+  }
+  return SITE_ALIASES[normalized] || null;
+}
+
+function getSiteStats(siteKey = DEFAULT_SITE) {
+  const resolved = resolveSiteKey(siteKey);
+  if (!resolved) {
+    return null;
+  }
+  if (!visitStatsBySite[resolved]) {
+    visitStatsBySite[resolved] = createEmptyStats();
+  }
+  return visitStatsBySite[resolved];
+}
+
+function normalizeSitesStore(raw) {
+  if (raw && typeof raw === 'object' && raw.sites && typeof raw.sites === 'object') {
+    const normalizedSites = {};
+    for (const [siteName, stats] of Object.entries(raw.sites)) {
+      const resolved = resolveSiteKey(siteName);
+      if (!resolved) {
+        continue;
+      }
+      normalizedSites[resolved] = normalizeStats(stats);
+    }
+    if (!Object.keys(normalizedSites).length) {
+      normalizedSites[DEFAULT_SITE] = createEmptyStats();
+    }
+    return normalizedSites;
+  }
+
+  return { [DEFAULT_SITE]: normalizeStats(raw) };
 }
 
 async function ensureDataFile() {
@@ -54,20 +106,22 @@ async function loadCount() {
   try {
     const fileContents = await fs.readFile(DATA_FILE, 'utf8');
     const parsed = JSON.parse(fileContents);
-    visitStats = normalizeStats(parsed);
-    pruneDailyStats();
-    console.log(
-      `[contador-api] Conteo inicial cargado: total=${visitStats.total}, rutas=${Object.keys(visitStats.routes).length}`
-    );
+    visitStatsBySite = normalizeSitesStore(parsed);
+    Object.values(visitStatsBySite).forEach((stats) => pruneDailyStats(stats));
+    const summary = Object.entries(visitStatsBySite)
+      .map(([siteName, stats]) => `${siteName}: total=${stats.total}, rutas=${Object.keys(stats.routes).length}`)
+      .join(' | ');
+    console.log(`[contador-api] Conteos iniciales cargados → ${summary}`);
   } catch (error) {
     console.error('[contador-api] No fue posible leer el archivo, iniciando en 0.', error);
-    visitStats = createEmptyStats();
+    visitStatsBySite = { [DEFAULT_SITE]: createEmptyStats() };
   }
 }
 
 async function persistCount() {
   try {
-    await fs.writeFile(DATA_FILE, JSON.stringify(visitStats, null, 2));
+    const payload = { version: 2, sites: visitStatsBySite };
+    await fs.writeFile(DATA_FILE, JSON.stringify(payload, null, 2));
   } catch (error) {
     console.error('[contador-api] Error guardando el contador, los incrementos pueden perderse.', error);
   }
@@ -316,15 +370,18 @@ function getTimestampForDateKey(dateKey) {
   return Number.isFinite(parsed) ? parsed - COLOMBIA_UTC_OFFSET_MS : NaN;
 }
 
-function pruneDailyStats(referenceDate = new Date()) {
-  if (!visitStats.daily) {
-    visitStats.daily = {};
+function pruneDailyStats(stats, referenceDate = new Date()) {
+  if (!stats) {
+    return;
   }
-  if (!visitStats.sessionDurations) {
-    visitStats.sessionDurations = {};
+  if (!stats.daily) {
+    stats.daily = {};
   }
-  if (!visitStats.routeDurations) {
-    visitStats.routeDurations = {};
+  if (!stats.sessionDurations) {
+    stats.sessionDurations = {};
+  }
+  if (!stats.routeDurations) {
+    stats.routeDurations = {};
   }
 
   const todayTimestamp = getTimestampForDateKey(getTodayKey(referenceDate));
@@ -333,9 +390,9 @@ function pruneDailyStats(referenceDate = new Date()) {
   }
   const cutoffTimestamp = todayTimestamp - (MAX_DAILY_HISTORY_DAYS - 1) * DAY_IN_MS;
 
-  pruneDateMap(visitStats.daily, cutoffTimestamp);
-  pruneDateMap(visitStats.sessionDurations, cutoffTimestamp);
-  pruneDateMap(visitStats.routeDurations, cutoffTimestamp);
+  pruneDateMap(stats.daily, cutoffTimestamp);
+  pruneDateMap(stats.sessionDurations, cutoffTimestamp);
+  pruneDateMap(stats.routeDurations, cutoffTimestamp);
 }
 
 function pruneDateMap(store, cutoffTimestamp) {
@@ -351,20 +408,20 @@ function pruneDateMap(store, cutoffTimestamp) {
   }
 }
 
-function incrementDailyCount(route, dateKey = getTodayKey()) {
-  if (!visitStats.daily) {
-    visitStats.daily = {};
+function incrementDailyCount(stats, route, dateKey = getTodayKey()) {
+  if (!stats.daily) {
+    stats.daily = {};
   }
 
-  if (!visitStats.daily[dateKey]) {
-    visitStats.daily[dateKey] = {};
+  if (!stats.daily[dateKey]) {
+    stats.daily[dateKey] = {};
   }
 
-  if (!visitStats.daily[dateKey][route]) {
-    visitStats.daily[dateKey][route] = 0;
+  if (!stats.daily[dateKey][route]) {
+    stats.daily[dateKey][route] = 0;
   }
 
-  visitStats.daily[dateKey][route] += 1;
+  stats.daily[dateKey][route] += 1;
 }
 
 function createDurationSummary(durationMs) {
@@ -376,17 +433,17 @@ function createDurationSummary(durationMs) {
   };
 }
 
-function updateSessionDurationMetrics(durationMs, dateKey = getTodayKey()) {
-  if (!visitStats.sessionDurations) {
-    visitStats.sessionDurations = {};
+function updateSessionDurationMetrics(stats, durationMs, dateKey = getTodayKey()) {
+  if (!stats.sessionDurations) {
+    stats.sessionDurations = {};
   }
 
-  if (!visitStats.sessionDurations[dateKey]) {
-    visitStats.sessionDurations[dateKey] = createDurationSummary(durationMs);
-    return visitStats.sessionDurations[dateKey];
+  if (!stats.sessionDurations[dateKey]) {
+    stats.sessionDurations[dateKey] = createDurationSummary(durationMs);
+    return stats.sessionDurations[dateKey];
   }
 
-  const summary = visitStats.sessionDurations[dateKey];
+  const summary = stats.sessionDurations[dateKey];
   summary.count = (Number(summary.count) || 0) + 1;
   summary.totalDuration = (Number(summary.totalDuration) || 0) + durationMs;
   summary.min = typeof summary.min === 'number' ? Math.min(summary.min, durationMs) : durationMs;
@@ -394,21 +451,21 @@ function updateSessionDurationMetrics(durationMs, dateKey = getTodayKey()) {
   return summary;
 }
 
-function updateRouteDurationMetrics(route, durationMs, dateKey = getTodayKey()) {
-  if (!visitStats.routeDurations) {
-    visitStats.routeDurations = {};
+function updateRouteDurationMetrics(stats, route, durationMs, dateKey = getTodayKey()) {
+  if (!stats.routeDurations) {
+    stats.routeDurations = {};
   }
 
-  if (!visitStats.routeDurations[dateKey]) {
-    visitStats.routeDurations[dateKey] = {};
+  if (!stats.routeDurations[dateKey]) {
+    stats.routeDurations[dateKey] = {};
   }
 
-  if (!visitStats.routeDurations[dateKey][route]) {
-    visitStats.routeDurations[dateKey][route] = createDurationSummary(durationMs);
-    return visitStats.routeDurations[dateKey][route];
+  if (!stats.routeDurations[dateKey][route]) {
+    stats.routeDurations[dateKey][route] = createDurationSummary(durationMs);
+    return stats.routeDurations[dateKey][route];
   }
 
-  const summary = visitStats.routeDurations[dateKey][route];
+  const summary = stats.routeDurations[dateKey][route];
   summary.count = (Number(summary.count) || 0) + 1;
   summary.totalDuration = (Number(summary.totalDuration) || 0) + durationMs;
   summary.min = typeof summary.min === 'number' ? Math.min(summary.min, durationMs) : durationMs;
@@ -434,7 +491,7 @@ function buildDurationSummaryResponse(summary) {
   };
 }
 
-function collectDailyVisits(rangeKey) {
+function collectDailyVisits(stats, rangeKey) {
   const days = RANGE_PRESETS[rangeKey];
   if (!days) {
     return null;
@@ -447,11 +504,11 @@ function collectDailyVisits(rangeKey) {
   }
   const startTimestamp = todayTimestamp - (days - 1) * DAY_IN_MS;
 
-  if (!visitStats.daily || !Object.keys(visitStats.daily).length) {
+  if (!stats.daily || !Object.keys(stats.daily).length) {
     return [];
   }
 
-  return Object.entries(visitStats.daily)
+  return Object.entries(stats.daily)
     .map(([dateKey, routes]) => ({
       dateKey,
       routes,
@@ -495,38 +552,53 @@ app.use(cors(corsOptions));
 app.use(express.json());
 
 app.get('/api/visits', (req, res) => {
-  res.json(visitStats);
+  const siteKey = resolveSiteKey(req.query.site);
+  if (!siteKey) {
+    return res.status(400).json({ message: 'El parámetro "site" no es válido. Usa losandes o endomedicos.' });
+  }
+  const stats = getSiteStats(siteKey);
+  res.json(stats);
 });
 
 app.get('/api/visits/daily', (req, res) => {
+  const siteKey = resolveSiteKey(req.query.site);
+  if (!siteKey) {
+    return res.status(400).json({ message: 'El parámetro "site" no es válido. Usa losandes o endomedicos.' });
+  }
+  const stats = getSiteStats(siteKey);
   const rangeKey = resolveRangeKey(req.query.range || 'week');
 
   if (!rangeKey) {
     return res.status(400).json({ message: 'La query "range" debe ser week, 30d o year.' });
   }
 
-  const days = collectDailyVisits(rangeKey);
+  const days = collectDailyVisits(stats, rangeKey);
   res.json({ range: rangeKey, days, availableRanges: Object.keys(RANGE_PRESETS) });
 });
 
 app.post('/api/visits', async (req, res, next) => {
   try {
+    const siteKey = resolveSiteKey(req.body?.site);
+    if (!siteKey) {
+      return res.status(400).json({ message: 'La propiedad "site" es inválida. Usa losandes o endomedicos.' });
+    }
+    const stats = getSiteStats(siteKey);
     const sanitizedRoute = sanitizeRoute(req.body?.route);
 
     if (!sanitizedRoute) {
       return res.status(400).json({ message: 'La propiedad "route" es obligatoria.' });
     }
 
-    if (!visitStats.routes[sanitizedRoute]) {
-      visitStats.routes[sanitizedRoute] = 0;
+    if (!stats.routes[sanitizedRoute]) {
+      stats.routes[sanitizedRoute] = 0;
     }
 
-    visitStats.routes[sanitizedRoute] += 1;
-    visitStats.total += 1;
-    incrementDailyCount(sanitizedRoute);
-    pruneDailyStats();
+    stats.routes[sanitizedRoute] += 1;
+    stats.total += 1;
+    incrementDailyCount(stats, sanitizedRoute);
+    pruneDailyStats(stats);
     await persistCount();
-    res.json(visitStats);
+    res.json(stats);
   } catch (error) {
     next(error);
   }
@@ -534,6 +606,11 @@ app.post('/api/visits', async (req, res, next) => {
 
 app.post('/api/visits/durations', async (req, res, next) => {
   try {
+    const siteKey = resolveSiteKey(req.body?.site);
+    if (!siteKey) {
+      return res.status(400).json({ message: 'La propiedad "site" es inválida. Usa losandes o endomedicos.' });
+    }
+    const stats = getSiteStats(siteKey);
     const scopeRaw = typeof req.body?.scope === 'string' ? req.body.scope.trim().toLowerCase() : '';
     if (scopeRaw !== 'session' && scopeRaw !== 'route') {
       return res.status(400).json({ message: 'La propiedad "scope" debe ser "session" o "route".' });
@@ -545,7 +622,7 @@ app.post('/api/visits/durations', async (req, res, next) => {
     }
 
     const dateKey = getTodayKey();
-    pruneDailyStats();
+    pruneDailyStats(stats);
 
     if (scopeRaw === 'route') {
       const sanitizedRoute = sanitizeRoute(req.body?.route);
@@ -553,7 +630,7 @@ app.post('/api/visits/durations', async (req, res, next) => {
         return res.status(400).json({ message: 'La propiedad "route" es obligatoria cuando scope es "route".' });
       }
 
-      const summary = updateRouteDurationMetrics(sanitizedRoute, durationMs, dateKey);
+      const summary = updateRouteDurationMetrics(stats, sanitizedRoute, durationMs, dateKey);
       await persistCount();
       return res.json({
         scope: scopeRaw,
@@ -563,7 +640,7 @@ app.post('/api/visits/durations', async (req, res, next) => {
       });
     }
 
-    const summary = updateSessionDurationMetrics(durationMs, dateKey);
+    const summary = updateSessionDurationMetrics(stats, durationMs, dateKey);
     await persistCount();
     res.json({
       scope: scopeRaw,

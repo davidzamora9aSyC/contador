@@ -21,6 +21,8 @@ Puedes definir el puerto con la variable de entorno `PORT` (por defecto 4000).
 - `GET /api/visits` → devuelve el estado completo del contador: `{ "total": number, "routes": { [route: string]: number } }`.
 - `POST /api/visits` → incrementa el total y la ruta indicada. Espera un cuerpo JSON con `{ "route": "inicio" }` y responde el mismo formato del `GET`.
 
+> Todos los endpoints aceptan el parámetro/propiedad `site` para determinar qué tablero actualizar o consultar. Si no envías nada se usa `losandes`. Usa `site=endomedicos` para manejar el nuevo tablero de Endomédicos sin mezclar datos.
+
 ## Flujo típico de despliegue (EC2)
 
 1. Copia la carpeta `contador-api` al servidor (o haz git pull del repo completo).
